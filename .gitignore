@@ -4,3 +4,4 @@ faker_Orders.sql
 faker_Products.sql
 faker_Riders.sql
 faker_Users.sql
+.streamlit/secrets.toml
