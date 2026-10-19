@@ -7,7 +7,7 @@ st.set_page_config(page_title="OLAP Data Warehouse Dashboard", layout="wide")
 
 # No caching: Connection is re-initialized on every interaction
 def init_connection():
-    DB_URI = 'mysql+pymysql://root:eighty80*six6@localhost/faker'
+    DB_URI = 'mysql+pymysql://avnadmin:AVNS_nYrrK36yeF2KYpse3G2@mysql-390fd756-virkato71-c11f.b.aivencloud.com:22255/faker'
     return create_engine(DB_URI)
 
 engine = init_connection()
