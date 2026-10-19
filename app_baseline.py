@@ -15,7 +15,7 @@ def init_connection():
         DB_URI = f"mysql+pymysql://{conn['username']}:{conn['password']}@{conn['host']}:{conn['port']}/{conn['database']}"
     else:
         # Fallback URI for local testing
-        DB_URI = "mysql+pymysql://avnadmin:YOUR_PASSWORD@mysql-390fd756-virkato71-c11f.b.aivencloud.com:22255/defaultdb"
+        DB_URI = "mysql+pymysql://avnadmin:AVNS_nYrrK36yeF2KYpse3G2@mysql-390fd756-virkato71-c11f.b.aivencloud.com:22255/faker"
     return create_engine(DB_URI)
 
 
