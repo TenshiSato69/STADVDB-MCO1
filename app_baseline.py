@@ -1,7 +1,7 @@
 import calendar
 import pandas as pd
 import streamlit as st
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 # --- Page Config (Must be the FIRST Streamlit command) ---
 st.set_page_config(page_title="OLAP Data Warehouse Dashboard", layout="wide")
@@ -9,15 +9,38 @@ st.set_page_config(page_title="OLAP Data Warehouse Dashboard", layout="wide")
 
 # --- Configuration & Connection ---
 def init_connection():
-    DB_URI = "mysql+pymysql://4D7HRxU1YMyqocC.root:<PASSWORD>@gateway01.ap-northeast-1.prod.aws.tidbcloud.com:4000/faker"
-    return create_engine(DB_URI)
+    # 1. Read from Streamlit Secrets if deployed on Streamlit Cloud
+    if "connections" in st.secrets and "mysql" in st.secrets["connections"]:
+        conn = st.secrets["connections"]["mysql"]
+        host = conn["host"]
+        port = conn.get("port", 4000)
+        user = conn["username"]
+        password = conn["password"]
+        database = conn.get("database", "faker")
+    else:
+        # 2. TiDB Cloud fallback
+        host = "gateway01.ap-northeast-1.prod.aws.tidbcloud.com"
+        port = 4000
+        user = "4D7HRxU1YMyqocC.root"
+        password = "V8vprts060560f46"
+        database = "faker"
+
+    db_uri = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
+    
+    # Required TLS/SSL parameters for TiDB Serverless
+    return create_engine(
+        db_uri,
+        connect_args={"ssl": {"ssl_mode": "PREFERRED"}},
+        pool_pre_ping=True
+    )
 
 
 engine = init_connection()
 
 
 def get_data(query, params=None):
-    return pd.read_sql(query, engine, params=params)
+    # Wrap in text() for SQLAlchemy 2.0 parameter binding compatibility
+    return pd.read_sql(text(query), engine, params=params)
 
 
 # ============ Individual Baseline Queries ============
