@@ -22,7 +22,7 @@ def init_connection():
         host = "gateway01.ap-northeast-1.prod.aws.tidbcloud.com"
         port = 4000
         user = "4D7HRxU1YMyqocC.root"
-        password = "V8vprts060560f46"
+        password = "1GqVW010xoLcUp0T"
         database = "faker"
 
     db_uri = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"

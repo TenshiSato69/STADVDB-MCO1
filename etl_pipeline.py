@@ -9,14 +9,14 @@ LOCAL_DB_URI = 'mysql+pymysql://root:eighty80*six6@localhost:3306/faker'
 local_engine = create_engine(LOCAL_DB_URI)
 
 # Ensure 'faker' database exists on TiDB Cloud before connecting directly
-TIDB_BASE_URI = 'mysql+pymysql://4D7HRxU1YMyqocC.root:V8vprts060560f46@gateway01.ap-northeast-1.prod.aws.tidbcloud.com:4000/test'
+TIDB_BASE_URI = 'mysql+pymysql://4D7HRxU1YMyqocC.root:1GqVW010xoLcUp0T@gateway01.ap-northeast-1.prod.aws.tidbcloud.com:4000/test'
 tidb_base_engine = create_engine(TIDB_BASE_URI, connect_args={"ssl": {"ssl_mode": "PREFERRED"}})
 
 with tidb_base_engine.begin() as conn:
     conn.execute(text("CREATE DATABASE IF NOT EXISTS faker;"))
 
 # Loading Connection (TiDB Cloud 'faker' Database)
-TIDB_DB_URI = 'mysql+pymysql://4D7HRxU1YMyqocC.root:V8vprts060560f46@gateway01.ap-northeast-1.prod.aws.tidbcloud.com:4000/faker'
+TIDB_DB_URI = 'mysql+pymysql://4D7HRxU1YMyqocC.root:1GqVW010xoLcUp0T@gateway01.ap-northeast-1.prod.aws.tidbcloud.com:4000/faker'
 TIDB_engine = create_engine(TIDB_DB_URI, connect_args={"ssl": {"ssl_mode": "PREFERRED"}})
 
 
