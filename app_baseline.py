@@ -9,7 +9,7 @@ st.set_page_config(page_title="OLAP Data Warehouse Dashboard", layout="wide")
 
 # --- Configuration & Connection ---
 def init_connection():
-    DB_URI = "mysql+pymysql://4D7HRxU1YMyqocC.root:V8vprts060560f46@gateway01.ap-northeast-1.prod.aws.tidbcloud.com:4000/faker"
+    DB_URI = "mysql+pymysql://avnadmin:AVNS_nYrrK36yeF2KYpse3G2@mysql-390fd756-virkato71-c11f.b.aivencloud.com:22255/faker"
     return create_engine(DB_URI)
 
 
