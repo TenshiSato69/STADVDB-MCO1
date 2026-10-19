@@ -4,21 +4,27 @@ from sqlalchemy import create_engine, text
 # ==========================================
 # 1. Database Connections (DUAL ENGINES)
 # ==========================================
-# Connection for EXTRACTION (Your Local Database)
+# Extraction Connection (Local MySQL)
 LOCAL_DB_URI = 'mysql+pymysql://root:eighty80*six6@localhost:3306/faker'
 local_engine = create_engine(LOCAL_DB_URI)
 
-# Connection for LOADING (Your Aiven Cloud Database)
-AIVEN_DB_URI = 'mysql+pymysql://avnadmin:AVNS_nYrrK36yeF2KYpse3G2@mysql-390fd756-virkato71-c11f.b.aivencloud.com:22255/faker'
-aiven_engine = create_engine(AIVEN_DB_URI)
+# Ensure 'faker' database exists on TiDB Cloud before connecting directly
+TIDB_BASE_URI = 'mysql+pymysql://4D7HRxU1YMyqocC.root:V8vprts060560f46@gateway01.ap-northeast-1.prod.aws.tidbcloud.com:4000/test'
+tidb_base_engine = create_engine(TIDB_BASE_URI, connect_args={"ssl": {"ssl_mode": "PREFERRED"}})
+
+with tidb_base_engine.begin() as conn:
+    conn.execute(text("CREATE DATABASE IF NOT EXISTS faker;"))
+
+# Loading Connection (TiDB Cloud 'faker' Database)
+TIDB_DB_URI = 'mysql+pymysql://4D7HRxU1YMyqocC.root:V8vprts060560f46@gateway01.ap-northeast-1.prod.aws.tidbcloud.com:4000/faker'
+TIDB_engine = create_engine(TIDB_DB_URI, connect_args={"ssl": {"ssl_mode": "PREFERRED"}})
 
 
 # ==========================================
-# Phase 1: EXTRACT (From Local)
+# Phase 1: EXTRACT (From Local Source)
 # ==========================================
 print("Extracting data from local source...")
 
-# Extracting using the local_engine
 users = pd.read_sql("SELECT * FROM users LIMIT 50000", local_engine)
 products = pd.read_sql("SELECT * FROM products LIMIT 50000", local_engine)
 riders = pd.read_sql("SELECT * FROM riders LIMIT 50000", local_engine)
@@ -26,8 +32,9 @@ couriers = pd.read_sql("SELECT * FROM couriers LIMIT 50000", local_engine)
 orders = pd.read_sql("SELECT * FROM orders LIMIT 100000", local_engine)
 orderitems = pd.read_sql("SELECT * FROM orderitems LIMIT 100000", local_engine)
 
+
 # ==========================================
-# Phase 2: TRANSFORM (No changes)
+# Phase 2: TRANSFORM
 # ==========================================
 print("Transforming data...")
 
@@ -38,7 +45,7 @@ dim_users['city'] = dim_users['city'].fillna('Unknown City')
 dim_users['country'] = dim_users['country'].fillna('Unknown Country')
 dim_users['gender'] = dim_users['gender'].str.strip().str.title()
 dim_users['gender'] = dim_users['gender'].fillna('Not Specified')
-gender_mapping = {'M':'Male', 'F':'Female'}
+gender_mapping = {'M': 'Male', 'F': 'Female'}
 dim_users['gender'] = dim_users['gender'].replace(gender_mapping)
 
 # --- Transform: Product Dimension ---
@@ -53,7 +60,7 @@ category_mapping = {
     'Bag': 'Bags',
     'Make Up': 'Makeup',
     'Clothes': 'Apparel',
-    "Men'S Apparel": 'Apparel' 
+    "Men'S Apparel": 'Apparel'
 }
 dim_products['category'] = dim_products['category'].replace(category_mapping)
 
@@ -111,33 +118,34 @@ fact_order_items = fact_order_items[fact_order_items['user_key'].isin(dim_users[
 fact_order_items = fact_order_items[fact_order_items['product_key'].isin(dim_products['product_id'])]
 fact_order_items = fact_order_items[fact_order_items['delivery_key'].isin(dim_delivery['rider_id'])]
 
-# ==========================================
-# Phase 3: LOAD (To Aiven Cloud)
-# ==========================================
-print("Clearing existing data from the Aiven Data Warehouse...")
 
-# Using aiven_engine.begin() to execute on the cloud
-with aiven_engine.begin() as conn:
+# ==========================================
+# Phase 3: LOAD (To TiDB Cloud)
+# ==========================================
+print("Preparing TiDB Data Warehouse...")
+
+# Safely truncate existing tables if they exist
+with TIDB_engine.begin() as conn:
     conn.execute(text("SET FOREIGN_KEY_CHECKS = 0;"))
-    conn.execute(text("TRUNCATE TABLE fact_order_items;"))
-    conn.execute(text("TRUNCATE TABLE dim_delivery;"))
-    conn.execute(text("TRUNCATE TABLE dim_products;"))
-    conn.execute(text("TRUNCATE TABLE dim_users;"))
+    for table in ['fact_order_items', 'dim_delivery', 'dim_products', 'dim_users']:
+        try:
+            conn.execute(text(f"TRUNCATE TABLE {table};"))
+        except Exception:
+            pass  # Table does not exist yet; to_sql will create it automatically
     conn.execute(text("SET FOREIGN_KEY_CHECKS = 1;"))
 
-print("Aiven Database cleared. Loading new data to cloud...")
+print("Loading transformed data into TiDB Cloud...")
 
-# Loading into Aiven using aiven_engine
-dim_users.to_sql('dim_users', aiven_engine, if_exists='append', index=False, chunksize=20000)
-print("Loaded dim_users to Aiven.")
+dim_users.to_sql('dim_users', TIDB_engine, if_exists='append', index=False, chunksize=1000)
+print("Loaded dim_users to TiDB Cloud.")
 
-dim_products.to_sql('dim_products', aiven_engine, if_exists='append', index=False, chunksize=20000)
-print("Loaded dim_products to Aiven.")
+dim_products.to_sql('dim_products', TIDB_engine, if_exists='append', index=False, chunksize=1000)
+print("Loaded dim_products to TiDB Cloud.")
 
-dim_delivery.to_sql('dim_delivery', aiven_engine, if_exists='append', index=False, chunksize=20000)
-print("Loaded dim_delivery to Aiven.")
+dim_delivery.to_sql('dim_delivery', TIDB_engine, if_exists='append', index=False, chunksize=1000)
+print("Loaded dim_delivery to TiDB Cloud.")
 
-fact_order_items.to_sql('fact_order_items', aiven_engine, if_exists='append', index=False, chunksize=20000)
-print("Loaded fact_order_items to Aiven.")
+fact_order_items.to_sql('fact_order_items', TIDB_engine, if_exists='append', index=False, chunksize=1000)
+print("Loaded fact_order_items to TiDB Cloud.")
 
 print("Cloud Migration and ETL Pipeline completed successfully!")
