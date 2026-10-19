@@ -12,14 +12,9 @@ def init_connection():
 
 engine = init_connection()
 
-
-# gets data when executing SQL query and returns it as a pandas Dataframe
-# I love pandas dataframe spamming all data, ang sarap DS
-def get_data(engine, query, params=None):
-    with engine.connect() as connection:
-        return pd.read_sql_query(text(query), connection, params=params)
-
-
+# No caching: Data is re-queried on every interaction
+def get_data(query, params=None):
+    return pd.read_sql(query, engine, params=params)
 
 # ============ individual baseline queries ============ 
 # gets the distinct order's months, in ascending months
