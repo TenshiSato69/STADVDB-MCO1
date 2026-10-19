@@ -136,16 +136,37 @@ with TIDB_engine.begin() as conn:
 
 print("Loading transformed data into TiDB Cloud...")
 
-dim_users.to_sql('dim_users', TIDB_engine, if_exists='append', index=False, chunksize=1000)
+dim_users.to_sql('dim_users', TIDB_engine, if_exists='append', index=False, chunksize=10000)
 print("Loaded dim_users to TiDB Cloud.")
 
-dim_products.to_sql('dim_products', TIDB_engine, if_exists='append', index=False, chunksize=1000)
+dim_products.to_sql('dim_products', TIDB_engine, if_exists='append', index=False, chunksize=10000)
 print("Loaded dim_products to TiDB Cloud.")
 
-dim_delivery.to_sql('dim_delivery', TIDB_engine, if_exists='append', index=False, chunksize=1000)
+dim_delivery.to_sql('dim_delivery', TIDB_engine, if_exists='append', index=False, chunksize=10000)
 print("Loaded dim_delivery to TiDB Cloud.")
 
-fact_order_items.to_sql('fact_order_items', TIDB_engine, if_exists='append', index=False, chunksize=1000)
+fact_order_items.to_sql('fact_order_items', TIDB_engine, if_exists='append', index=False, chunksize=10000)
 print("Loaded fact_order_items to TiDB Cloud.")
 
+
+# ==========================================
+# Phase 4: INDEXING (Post-Load Optimization)
+# ==========================================
+print("Creating secondary indexes in TiDB Cloud...")
+
+indexes = [
+    "CREATE INDEX idx_order_date ON fact_order_items(order_date);",
+    "CREATE INDEX idx_product_category ON dim_products(category);",
+    "CREATE INDEX idx_user_location ON dim_users(country, city);"
+]
+
+with TIDB_engine.begin() as conn:
+    for idx_sql in indexes:
+        try:
+            conn.execute(text(idx_sql))
+            print(f"Executed: {idx_sql}")
+        except Exception as e:
+            print(f"Index notice (may already exist): {e}")
+
+print("Indexing complete!")
 print("Cloud Migration and ETL Pipeline completed successfully!")

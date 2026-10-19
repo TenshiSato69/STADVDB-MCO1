@@ -1,7 +1,7 @@
 import calendar
 import pandas as pd
 import streamlit as st
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 # --- Page Config (Must be the FIRST Streamlit command) ---
 st.set_page_config(page_title="OLAP Data Warehouse Dashboard", layout="wide")
@@ -9,15 +9,21 @@ st.set_page_config(page_title="OLAP Data Warehouse Dashboard", layout="wide")
 
 # --- Configuration & Connection ---
 def init_connection():
-    DB_URI = "mysql+pymysql://4D7HRxU1YMyqocC.root:V8vprts060560f46@gateway01.ap-northeast-1.prod.aws.tidbcloud.com:4000/faker"
-    return create_engine(DB_URI)
+    if "connections" in st.secrets and "mysql" in st.secrets["connections"]:
+        conn = st.secrets["connections"]["mysql"]
+        DB_URI = f"mysql+pymysql://{conn['username']}:{conn['password']}@{conn['host']}:{conn['port']}/{conn['database']}"
+    else:
+        # Direct TiDB Cloud URI fallback
+        DB_URI = "mysql+pymysql://4D7HRxU1YMyqocC.root:V8vprts060560f46@gateway01.ap-northeast-1.prod.aws.tidbcloud.com:4000/faker"
+    
+    return create_engine(DB_URI, connect_args={"ssl": {"ssl_mode": "PREFERRED"}})
 
 
 engine = init_connection()
 
 
 def get_data(query, params=None):
-    return pd.read_sql(query, engine, params=params)
+    return pd.read_sql(text(query), engine, params=params)
 
 
 # ============ Individual Baseline Queries ============
