@@ -1,44 +1,54 @@
-import streamlit as st
+import calendar
 import pandas as pd
+import streamlit as st
 from sqlalchemy import create_engine
 
-# --- Configuration & Connection ---
+# --- Page Config (Must be the FIRST Streamlit command) ---
 st.set_page_config(page_title="OLAP Data Warehouse Dashboard", layout="wide")
 
-# No caching: Connection is re-initialized on every interaction
+
+# --- Configuration & Connection ---
 def init_connection():
-    DB_URI = 'mysql+pymysql://avnadmin:AVNS_nYrrK36yeF2KYpse3G2@mysql-390fd756-virkato71-c11f.b.aivencloud.com:22255/faker'
+    # Attempt to read credentials securely from Streamlit Secrets
+    if "connections" in st.secrets and "mysql" in st.secrets["connections"]:
+        conn = st.secrets["connections"]["mysql"]
+        DB_URI = f"mysql+pymysql://{conn['username']}:{conn['password']}@{conn['host']}:{conn['port']}/{conn['database']}"
+    else:
+        # Fallback URI for local testing
+        DB_URI = "mysql+pymysql://avnadmin:YOUR_PASSWORD@mysql-390fd756-virkato71-c11f.b.aivencloud.com:22255/defaultdb"
     return create_engine(DB_URI)
+
 
 engine = init_connection()
 
-# No caching: Data is re-queried on every interaction
+
 def get_data(query, params=None):
     return pd.read_sql(query, engine, params=params)
 
-# ============ individual baseline queries ============ 
-# gets the distinct order's months, in ascending months
-def get_available_months(engine):
+
+# ============ Individual Baseline Queries ============
+
+
+def get_available_months():
     months_query = """
     SELECT DISTINCT EXTRACT(MONTH FROM order_date) as month
     FROM fact_order_items 
     WHERE order_date IS NOT NULL
     ORDER BY month;
     """
-    return get_data(engine, months_query)
+    return get_data(months_query)
 
-# gets the unique product categories
-def get_available_categories(engine):
+
+def get_available_categories():
     categories_query = """
     SELECT DISTINCT category 
     FROM dim_products 
-    ORDER BY CATEGORY;
+    ORDER BY category;
     """
-    return get_data(engine, categories_query)
+    return get_data(categories_query)
 
-# roll-up query, return revenue and item totals by geographic and product hierarchy
-# They see me rolling, they hating
-def get_rollup_data(engine):
+
+def get_rollup_data():
     rollup_query = """
     SELECT 
         COALESCE(u.country, 'All Countries') AS country,
@@ -52,13 +62,10 @@ def get_rollup_data(engine):
     GROUP BY u.country, u.city, p.category 
     WITH ROLLUP;
     """
-    return get_data(engine, rollup_query)
+    return get_data(rollup_query)
 
-# pivot query
-# returns revenue by product category & normalized user's gender
-# `selected_month` is optional. `selected_categories` may be an empty list.
-# Filter values are passed as bound parameters, not concatenated into SQL.
-def get_pivot_data(engine, selected_month=None, selected_categories=None):
+
+def get_pivot_data(selected_month=None, selected_categories=None):
     pivot_query = """
     SELECT 
         p.category AS product_category,
@@ -77,14 +84,12 @@ def get_pivot_data(engine, selected_month=None, selected_categories=None):
 
     params = {}
 
-    # if there's a year, filter for only that year
     if selected_month is not None:
         pivot_query += " AND MONTH(f.order_date) = :selected_month"
         params["selected_month"] = selected_month
-    # if selected_categories is present, 
+
     if selected_categories:
         placeholders = []
-
         for index, category in enumerate(selected_categories):
             parameter_name = f"category_{index}"
             placeholders.append(f":{parameter_name}")
@@ -93,40 +98,32 @@ def get_pivot_data(engine, selected_month=None, selected_categories=None):
         pivot_query += f" AND p.category IN ({', '.join(placeholders)})"
 
     pivot_query += " GROUP BY p.category ORDER BY total_revenue DESC;"
-    return get_data(engine, pivot_query, params=params or None)
+    return get_data(pivot_query, params=params or None)
 
-# ============== Streamlit UI ============== 
+
+# ============== Streamlit UI ==============
+
 
 def main():
-    st.set_page_config(
-        page_title="OLAP Data Warehouse Dashboard",
-        layout="wide",
-    )
-
-    engine = init_connection()
-
-    # Sidebar: Slice & Dice Filters
     st.sidebar.header("OLAP Filters (Slice & Dice)")
 
-    months_df = get_available_months(engine)
+    months_df = get_available_months()
     available_months = [None] + months_df["month"].dropna().astype(int).tolist()
 
     selected_month = st.sidebar.selectbox(
         "Select Month (Slice):",
         available_months,
         format_func=lambda month: (
-            "All Months"
-            if month is None
-            else calendar.month_name[int(month)]
+            "All Months" if month is None else calendar.month_name[int(month)]
         ),
     )
 
-    categories_df = get_available_categories(engine)
+    categories_df = get_available_categories()
     selected_categories = st.sidebar.multiselect(
         "Select Categories (Dice):",
         categories_df["category"].tolist(),
     )
-    # Main dashboard
+
     st.title("Enterprise Sales & Order OLAP Dashboard (Unoptimized)")
 
     # Section 1: Roll-up & Drill-down
@@ -142,7 +139,7 @@ def main():
         ],
     )
 
-    rollup_data = get_rollup_data(engine)
+    rollup_data = get_rollup_data()
 
     if granularity == "Country (Roll-up)":
         filtered_rollup = rollup_data[
@@ -168,7 +165,6 @@ def main():
     )
 
     pivot_data = get_pivot_data(
-        engine,
         selected_month=selected_month,
         selected_categories=selected_categories,
     )
