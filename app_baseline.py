@@ -9,13 +9,7 @@ st.set_page_config(page_title="OLAP Data Warehouse Dashboard", layout="wide")
 
 # --- Configuration & Connection ---
 def init_connection():
-    # Attempt to read credentials securely from Streamlit Secrets
-    if "connections" in st.secrets and "mysql" in st.secrets["connections"]:
-        conn = st.secrets["connections"]["mysql"]
-        DB_URI = f"mysql+pymysql://{conn['username']}:{conn['password']}@{conn['host']}:{conn['port']}/{conn['database']}"
-    else:
-        # Fallback URI for local testing
-        DB_URI = "mysql+pymysql://avnadmin:AVNS_nYrrK36yeF2KYpse3G2@mysql-390fd756-virkato71-c11f.b.aivencloud.com:22255/faker"
+    DB_URI = "mysql+pymysql://avnadmin:AVNS_nYrrK36yeF2KYpse3G2@mysql-390fd756-virkato71-c11f.b.aivencloud.com:22255/faker"
     return create_engine(DB_URI)
 
 
