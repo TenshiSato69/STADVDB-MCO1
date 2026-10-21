@@ -1,23 +1,39 @@
 import pandas as pd
+import streamlit as st
 from sqlalchemy import create_engine, text
 
 # ==========================================
-# 1. Database Connections (DUAL ENGINES)
+# 1. Database Connections (Secure via secrets.toml)
 # ==========================================
 # Extraction Connection (Local MySQL)
 LOCAL_DB_URI = 'mysql+pymysql://root:eighty80*six6@localhost:3306/faker'
 local_engine = create_engine(LOCAL_DB_URI)
 
-# Ensure 'faker' database exists on TiDB Cloud before connecting directly
-TIDB_BASE_URI = 'mysql+pymysql://4D7HRxU1YMyqocC.root:1GqVW010xoLcUp0T@gateway01.ap-northeast-1.prod.aws.tidbcloud.com:4000/test'
+# Loading Connection (TiDB Cloud via secrets.toml)
+if "connections" in st.secrets and "mysql" in st.secrets["connections"]:
+    conn = st.secrets["connections"]["mysql"]
+    TIDB_HOST = conn["host"]
+    TIDB_PORT = conn.get("port", 4000)
+    TIDB_USER = conn["username"]
+    TIDB_PASS = conn["password"]
+else:
+    raise RuntimeError("TiDB credentials missing from .streamlit/secrets.toml")
+
+# Base engine to create the databases
+TIDB_BASE_URI = f'mysql+pymysql://{TIDB_USER}:{TIDB_PASS}@{TIDB_HOST}:{TIDB_PORT}/test'
 tidb_base_engine = create_engine(TIDB_BASE_URI, connect_args={"ssl": {"ssl_mode": "PREFERRED"}})
 
-with tidb_base_engine.begin() as conn:
-    conn.execute(text("CREATE DATABASE IF NOT EXISTS faker;"))
+# Create both databases if they don't exist
+with tidb_base_engine.begin() as db_conn:
+    db_conn.execute(text("CREATE DATABASE IF NOT EXISTS faker;"))
+    db_conn.execute(text("CREATE DATABASE IF NOT EXISTS faker_indexed;"))
 
-# Loading Connection (TiDB Cloud 'faker' Database)
-TIDB_DB_URI = 'mysql+pymysql://4D7HRxU1YMyqocC.root:1GqVW010xoLcUp0T@gateway01.ap-northeast-1.prod.aws.tidbcloud.com:4000/faker'
-TIDB_engine = create_engine(TIDB_DB_URI, connect_args={"ssl": {"ssl_mode": "PREFERRED"}})
+# Engines for both data warehouses
+TIDB_FAKER_URI = f'mysql+pymysql://{TIDB_USER}:{TIDB_PASS}@{TIDB_HOST}:{TIDB_PORT}/faker'
+TIDB_FAKER_engine = create_engine(TIDB_FAKER_URI, connect_args={"ssl": {"ssl_mode": "PREFERRED"}})
+
+TIDB_INDEXED_URI = f'mysql+pymysql://{TIDB_USER}:{TIDB_PASS}@{TIDB_HOST}:{TIDB_PORT}/faker_indexed'
+TIDB_INDEXED_engine = create_engine(TIDB_INDEXED_URI, connect_args={"ssl": {"ssl_mode": "PREFERRED"}})
 
 
 # ==========================================
@@ -120,47 +136,93 @@ fact_order_items = fact_order_items[fact_order_items['delivery_key'].isin(dim_de
 
 
 # ==========================================
-# Phase 3: LOAD (To TiDB Cloud)
+# Phase 3: INITIALIZE SCHEMA & LOAD (DUAL DB)
 # ==========================================
-print("Preparing TiDB Data Warehouse...")
+schema_ddl = """
+SET FOREIGN_KEY_CHECKS = 0;
 
-# Safely truncate existing tables if they exist
-with TIDB_engine.begin() as conn:
-    conn.execute(text("SET FOREIGN_KEY_CHECKS = 0;"))
-    for table in ['fact_order_items', 'dim_delivery', 'dim_products', 'dim_users']:
-        try:
-            conn.execute(text(f"TRUNCATE TABLE {table};"))
-        except Exception:
-            pass  # Table does not exist yet; to_sql will create it automatically
-    conn.execute(text("SET FOREIGN_KEY_CHECKS = 1;"))
+-- Wipe out old tables and conflicting foreign keys
+DROP TABLE IF EXISTS fact_order_items;
+DROP TABLE IF EXISTS dim_delivery;
+DROP TABLE IF EXISTS dim_products;
+DROP TABLE IF EXISTS dim_users;
 
-print("Loading transformed data into TiDB Cloud...")
+-- Create fresh tables with proper Primary Keys
+CREATE TABLE dim_users (
+    user_id INT PRIMARY KEY,
+    username VARCHAR(255),
+    first_name VARCHAR(255),
+    last_name VARCHAR(255),
+    city VARCHAR(255),
+    country VARCHAR(255),
+    gender VARCHAR(50)
+);
 
-dim_users.to_sql('dim_users', TIDB_engine, if_exists='append', index=False, chunksize=10000)
-print("Loaded dim_users to TiDB Cloud.")
+CREATE TABLE dim_products (
+    product_id INT PRIMARY KEY,
+    product_code VARCHAR(255),
+    category VARCHAR(255),
+    name VARCHAR(255),
+    description TEXT
+);
 
-dim_products.to_sql('dim_products', TIDB_engine, if_exists='append', index=False, chunksize=10000)
-print("Loaded dim_products to TiDB Cloud.")
+CREATE TABLE dim_delivery (
+    rider_id INT PRIMARY KEY,
+    rider_first_name VARCHAR(255),
+    rider_last_name VARCHAR(255),
+    vehicle_type VARCHAR(255),
+    courier_id INT,
+    courier_name VARCHAR(255)
+);
 
-dim_delivery.to_sql('dim_delivery', TIDB_engine, if_exists='append', index=False, chunksize=10000)
-print("Loaded dim_delivery to TiDB Cloud.")
+CREATE TABLE fact_order_items (
+    fact_id INT AUTO_INCREMENT PRIMARY KEY,
+    order_id INT,
+    order_number VARCHAR(255),
+    user_key INT,
+    product_key INT,
+    delivery_key INT,
+    order_date DATETIME,
+    delivery_date DATETIME,
+    quantity INT,
+    unit_price FLOAT,
+    total_amount FLOAT
+);
 
-fact_order_items.to_sql('fact_order_items', TIDB_engine, if_exists='append', index=False, chunksize=10000)
-print("Loaded fact_order_items to TiDB Cloud.")
+SET FOREIGN_KEY_CHECKS = 1;
+"""
+
+engines = {
+    "faker": TIDB_FAKER_engine, 
+    "faker_indexed": TIDB_INDEXED_engine
+}
+
+for db_name, engine in engines.items():
+    print(f"\nPreparing TiDB Schema for {db_name}...")
+    with engine.begin() as conn:
+        for statement in schema_ddl.split(';'):
+            if statement.strip():
+                conn.execute(text(statement + ';'))
+
+    print(f"Loading transformed data into {db_name}...")
+    # Increased chunksize to 10,000 for faster cloud uploading
+    dim_users.to_sql('dim_users', engine, if_exists='append', index=False, chunksize=10000)
+    dim_products.to_sql('dim_products', engine, if_exists='append', index=False, chunksize=10000)
+    dim_delivery.to_sql('dim_delivery', engine, if_exists='append', index=False, chunksize=10000)
+    fact_order_items.to_sql('fact_order_items', engine, if_exists='append', index=False, chunksize=10000)
 
 
 # ==========================================
-# Phase 4: INDEXING (Post-Load Optimization)
+# Phase 4: INDEXING (faker_indexed ONLY)
 # ==========================================
-print("Creating secondary indexes in TiDB Cloud...")
-
+print("\nCreating secondary indexes in faker_indexed...")
 indexes = [
     "CREATE INDEX idx_order_date ON fact_order_items(order_date);",
     "CREATE INDEX idx_product_category ON dim_products(category);",
     "CREATE INDEX idx_user_location ON dim_users(country, city);"
 ]
 
-with TIDB_engine.begin() as conn:
+with TIDB_INDEXED_engine.begin() as conn:
     for idx_sql in indexes:
         try:
             conn.execute(text(idx_sql))
@@ -168,5 +230,4 @@ with TIDB_engine.begin() as conn:
         except Exception as e:
             print(f"Index notice (may already exist): {e}")
 
-print("Indexing complete!")
-print("Cloud Migration and ETL Pipeline completed successfully!")
+print("\nDual Cloud Migration and ETL Pipeline completed successfully!")

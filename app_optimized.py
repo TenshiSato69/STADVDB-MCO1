@@ -1,65 +1,80 @@
-import streamlit as st
+import calendar
 import pandas as pd
+import streamlit as st
 from sqlalchemy import create_engine, text
 
-# --- Configuration & Connection ---
-st.set_page_config(page_title="Optimized OLAP Data Warehouse Dashboard", layout="wide")
+# --- Page Config ---
+st.set_page_config(page_title="OLAP Data Warehouse Dashboard", layout="wide")
 
-# Cache the connection so it doesn't reload on every UI interaction
+# --- Configuration & Connection ---
 @st.cache_resource
 def init_connection():
-    DB_URI = 'mysql+pymysql://<username>:<password>@localhost/faker'
-    return create_engine(DB_URI)
+    # 1. Read from Streamlit Secrets if deployed on Streamlit Cloud
+    if "connections" in st.secrets and "mysql" in st.secrets["connections"]:
+        conn = st.secrets["connections"]["mysql"]
+        host = conn["host"]
+        port = conn.get("port", 4000)
+        user = conn["username"]
+        password = conn["password"]
+        database = "faker_indexed"  # Force the optimized database
+    else:
+        # 2. TiDB Cloud fallback
+        host = "gateway01.ap-northeast-1.prod.aws.tidbcloud.com"
+        port = 4000
+        user = "4D7HRxU1YMyqocC.root"
+        password = "1GqVW010xoLcUp0T"
+        database = "faker_indexed"  # Force the optimized database
 
-engine = init_connection()
+    db_uri = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
+    
+    # Required TLS/SSL parameters for TiDB Serverless
+    return create_engine(
+        db_uri,
+        connect_args={"ssl": {"ssl_mode": "PREFERRED"}},
+        pool_pre_ping=True
+    )
 
-# --- Automatic Database Optimization (Secondary Indexes) ---
-@st.cache_resource
-def setup_indexes():
-    with st.spinner("Initializing database and ensuring indexes exist..."):
-        indexes_to_create = [
-            "CREATE INDEX idx_order_date ON fact_order_items(order_date);",
-            "CREATE INDEX idx_product_category ON dim_products(category);",
-            "CREATE INDEX idx_user_location ON dim_users(country, city);"
-        ]
-        
-        with engine.connect() as conn:
-            for idx_query in indexes_to_create:
-                try:
-                    conn.execute(text(idx_query))
-                    conn.commit()
-                except Exception:
-                    pass
 
-setup_indexes()
+def get_data(engine, query, params=None):
+    with engine.connect() as connection:
+        return pd.read_sql_query(text(query), connection, params=params)
 
-# Helper function to fetch data safely using caching
-@st.cache_data
-def get_data(query, params=None):
-    return pd.read_sql(query, engine, params=params)
 
-# --- Sidebar: Slice & Dice Filters ---
-st.sidebar.header("OLAP Filters (Slice & Dice)")
+# ============ Individual Optimized Queries ============
 
-years_query = "SELECT DISTINCT YEAR(order_date) as year FROM fact_order_items ORDER BY year;"
-years_df = get_data(years_query)
-selected_year = st.sidebar.selectbox("Select Year (Slice):", [None] + years_df['year'].tolist())
 
-categories_query = "SELECT DISTINCT category FROM dim_products;"
-categories_df = get_data(categories_query)
-selected_categories = st.sidebar.multiselect("Select Categories (Dice):", categories_df['category'].tolist())
+def get_available_months(engine):
+    months_query = """
+    SELECT DISTINCT EXTRACT(MONTH FROM order_date) as month
+    FROM fact_order_items 
+    WHERE order_date IS NOT NULL
+    ORDER BY month;
+    """
+    return get_data(engine, months_query)
 
-# --- Main Dashboard ---
-st.title("Enterprise Sales & Delivery OLAP Dashboard (Optimized)")
 
-# --- Section 1: Roll-up & Drill-down ---
-st.header("1. Geographic & Product Hierarchy (Roll-up)")
-st.write("Use the toggle below to adjust the granularity of the report.")
+def get_available_categories(engine):
+    categories_query = """
+    SELECT DISTINCT category 
+    FROM dim_products 
+    ORDER BY category;
+    """
+    return get_data(engine, categories_query)
 
-granularity = st.radio("Select Granularity Level:", ["Country (Roll-up)", "City (Drill-down)", "Product Category (Drill-down)"])
 
-# OPTIMIZED: Query Reformulation using STRAIGHT_JOIN to dictate execution order
-rollup_query = """
+def get_available_countries(engine):
+    countries_query = """
+    SELECT DISTINCT country 
+    FROM dim_users 
+    WHERE country IS NOT NULL AND country != 'Unknown Country'
+    ORDER BY country;
+    """
+    return get_data(engine, countries_query)
+
+
+def get_rollup_data(engine):
+    # Let MySQL Cost-Based Optimizer leverage Hash Joins and secondary indexes naturally
+    rollup_query = """
     SELECT 
         COALESCE(u.country, 'All Countries') AS country,
         COALESCE(u.city, 'All Cities') AS city,
@@ -67,27 +82,66 @@ rollup_query = """
         SUM(f.total_amount) AS total_revenue,
         SUM(f.quantity) AS total_items_sold
     FROM fact_order_items f
-    STRAIGHT_JOIN dim_users u ON f.user_key = u.user_id
-    STRAIGHT_JOIN dim_products p ON f.product_key = p.product_id
-    GROUP BY u.country, u.city, p.category WITH ROLLUP;
-"""
-rollup_data = get_data(rollup_query)
+    JOIN dim_users u ON f.user_key = u.user_id
+    JOIN dim_products p ON f.product_key = p.product_id
+    GROUP BY u.country, u.city, p.category 
+    WITH ROLLUP;
+    """
+    return get_data(engine, rollup_query)
 
-if granularity == "Country (Roll-up)":
-    filtered_rollup = rollup_data[(rollup_data['city'] == 'All Cities') & (rollup_data['country'] != 'All Countries')]
-elif granularity == "City (Drill-down)":
-    filtered_rollup = rollup_data[(rollup_data['product_category'] == 'All Categories') & (rollup_data['city'] != 'All Cities')]
-else:
-    filtered_rollup = rollup_data[(rollup_data['product_category'] != 'All Categories')]
 
-st.dataframe(filtered_rollup, use_container_width=True)
+def get_drilldown_data(engine, selected_country=None, selected_city=None):
+    # OPTIMIZED: CTE pre-filters dim_users using composite index idx_user_location(country, city)
+    params = {}
+    if selected_country:
+        params["selected_country"] = selected_country
+        user_where = "WHERE country = :selected_country"
+        if selected_city:
+            params["selected_city"] = selected_city
+            user_where += " AND city = :selected_city"
+    else:
+        user_where = "WHERE country IS NOT NULL"
 
-# --- Section 2: Pivot Table ---
-st.header("2. Revenue Pivot by User Gender")
-st.write("Cross-tabulation comparing revenue by product category and gender.")
+    drilldown_query = f"""
+    WITH FilteredUsers AS (
+        SELECT user_id, country, city
+        FROM dim_users
+        {user_where}
+    )
+    SELECT 
+        u.country,
+        u.city,
+        p.category AS product_category,
+        SUM(f.total_amount) AS total_revenue,
+        SUM(f.quantity) AS total_items_sold
+    FROM FilteredUsers u
+    JOIN fact_order_items f ON u.user_id = f.user_key
+    JOIN dim_products p ON f.product_key = p.product_id
+    GROUP BY u.country, u.city, p.category
+    ORDER BY u.country, u.city, total_revenue DESC;
+    """
+    return get_data(engine, drilldown_query, params=params or None)
 
-# OPTIMIZED: Query Reformulation using Common Table Expressions (CTEs)
-pivot_query = """
+
+def get_pivot_data(engine, selected_month=None, selected_categories=None):
+    # OPTIMIZED: CTEs isolate predicate filtering BEFORE table joins and matrix aggregation
+    fact_filters = ""
+    prod_filters = ""
+    params = {}
+
+    if selected_month is not None:
+        fact_filters += " AND MONTH(order_date) = :selected_month"
+        params["selected_month"] = selected_month
+
+    if selected_categories:
+        placeholders = []
+        for index, category in enumerate(selected_categories):
+            parameter_name = f"category_{index}"
+            placeholders.append(f":{parameter_name}")
+            params[parameter_name] = category
+        prod_filters += f" AND category IN ({', '.join(placeholders)})"
+
+    pivot_query = f"""
     WITH FilteredFacts AS (
         SELECT product_key, user_key, total_amount
         FROM fact_order_items
@@ -109,26 +163,141 @@ pivot_query = """
     JOIN FilteredProducts p ON f.product_key = p.product_id
     GROUP BY p.category 
     ORDER BY total_revenue DESC;
-"""
+    """
 
-fact_filters = ""
-prod_filters = ""
-params = []
+    return get_data(engine, pivot_query, params=params or None)
 
-if selected_year:
-    fact_filters = " AND YEAR(order_date) = %s"
-    params.append(selected_year)
 
-if selected_categories:
-    format_strings = ','.join(['%s'] * len(selected_categories))
-    prod_filters = f" AND category IN ({format_strings})"
-    params.extend(selected_categories)
+# ============== Streamlit UI ==============
 
-final_pivot_query = pivot_query.format(fact_filters=fact_filters, prod_filters=prod_filters)
 
-pivot_data = get_data(final_pivot_query, params=tuple(params) if params else None)
-st.dataframe(pivot_data, use_container_width=True)
+def main():
+    engine = init_connection()
 
-if not pivot_data.empty:
-    chart_data = pivot_data.set_index("product_category")[["revenue_male", "revenue_female"]]
-    st.bar_chart(chart_data)
+    # Sidebar: Slice & Dice Filters
+    st.sidebar.header("OLAP Filters (Slice & Dice)")
+
+    months_df = get_available_months(engine)
+    available_months = [None] + months_df["month"].dropna().astype(int).tolist()
+
+    selected_month = st.sidebar.selectbox(
+        "Select Month (Slice):",
+        available_months,
+        format_func=lambda month: (
+            "All Months" if month is None else calendar.month_name[int(month)]
+        ),
+    )
+
+    categories_df = get_available_categories(engine)
+    selected_categories = st.sidebar.multiselect(
+        "Select Categories (Dice):",
+        categories_df["category"].tolist(),
+    )
+
+    # Main dashboard
+    st.title("Enterprise Sales & Order OLAP Dashboard (Optimized)")
+
+    # Section 1: Roll-up & Drill-down
+    st.header("1. Geographic & Product Hierarchy (Roll-up & Drill-down)")
+    st.write("Navigate global sales summaries or perform targeted country drill-downs.")
+
+    op_mode = st.radio(
+        "Select Analytical View:",
+        ["Full Roll-up Summary", "Geographic Drill-down"],
+    )
+
+    if op_mode == "Full Roll-up Summary":
+        granularity = st.radio(
+            "Select Granularity Level:",
+            [
+                "Country (Roll-up)",
+                "City (Drill-down)",
+                "Product Category (Drill-down)",
+            ],
+        )
+
+        rollup_data = get_rollup_data(engine)
+
+        if granularity == "Country (Roll-up)":
+            filtered_rollup = rollup_data[
+                (rollup_data["city"] == "All Cities")
+                & (rollup_data["country"] != "All Countries")
+            ]
+            x_col = "country"
+        elif granularity == "City (Drill-down)":
+            filtered_rollup = rollup_data[
+                (rollup_data["product_category"] == "All Categories")
+                & (rollup_data["city"] != "All Cities")
+            ]
+            x_col = "city"
+        else:
+            filtered_rollup = rollup_data[
+                rollup_data["product_category"] != "All Categories"
+            ]
+            x_col = "product_category"
+
+        st.dataframe(filtered_rollup, use_container_width=True)
+
+        if not filtered_rollup.empty and x_col in filtered_rollup.columns:
+            chart_df = (
+                filtered_rollup[[x_col, "total_revenue"]]
+                .dropna()
+                .groupby(x_col)["total_revenue"]
+                .sum()
+            )
+            st.subheader(f"Total Revenue Breakdown by {granularity.split(' ')[0]}")
+            st.bar_chart(chart_df)
+
+    else:
+        # Dynamic country selection from dim_users
+        countries_df = get_available_countries(engine)
+        available_countries = countries_df["country"].tolist()
+
+        if available_countries:
+            selected_country = st.selectbox(
+                "Select Country to Drill-Down:",
+                available_countries,
+            )
+
+            drilldown_data = get_drilldown_data(
+                engine, selected_country=selected_country
+            )
+            st.dataframe(drilldown_data, use_container_width=True)
+
+            if not drilldown_data.empty:
+                chart_df = (
+                    drilldown_data.groupby("city")["total_revenue"]
+                    .sum()
+                    .reset_index()
+                    .set_index("city")
+                )
+                st.subheader(f"City Revenue Share in {selected_country}")
+                st.bar_chart(chart_df)
+        else:
+            st.warning("No user location data available for drill-down.")
+
+    # Section 2: Pivot table
+    st.header("2. Revenue Pivot by User Gender")
+    st.write(
+        "Cross-tabulation comparing revenue across product categories and user demographics."
+    )
+
+    pivot_data = get_pivot_data(
+        engine,
+        selected_month=selected_month,
+        selected_categories=selected_categories,
+    )
+    st.dataframe(pivot_data, use_container_width=True)
+
+    if not pivot_data.empty:
+        chart_data = pivot_data.set_index("product_category")[
+            ["revenue_male", "revenue_female", "revenue_unspecified"]
+        ]
+        chart_data.columns = ["Male", "Female", "Unspecified / Other"]
+
+        st.subheader("Gender Revenue Share per Category")
+        st.bar_chart(chart_data, stack=True)
+
+
+if __name__ == "__main__":
+    main()
