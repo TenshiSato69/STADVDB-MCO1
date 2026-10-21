@@ -41,12 +41,12 @@ TIDB_INDEXED_engine = create_engine(TIDB_INDEXED_URI, connect_args={"ssl": {"ssl
 # ==========================================
 print("Extracting data from local source...")
 
-users = pd.read_sql("SELECT * FROM users LIMIT 50000", local_engine)
-products = pd.read_sql("SELECT * FROM products LIMIT 50000", local_engine)
-riders = pd.read_sql("SELECT * FROM riders LIMIT 50000", local_engine)
-couriers = pd.read_sql("SELECT * FROM couriers LIMIT 50000", local_engine)
-orders = pd.read_sql("SELECT * FROM orders LIMIT 100000", local_engine)
-orderitems = pd.read_sql("SELECT * FROM orderitems LIMIT 100000", local_engine)
+users = pd.read_sql("SELECT * FROM users LIMIT 250000", local_engine)
+products = pd.read_sql("SELECT * FROM products LIMIT 250000", local_engine)
+riders = pd.read_sql("SELECT * FROM riders LIMIT 250000", local_engine)
+couriers = pd.read_sql("SELECT * FROM couriers LIMIT 250000", local_engine)
+orders = pd.read_sql("SELECT * FROM orders LIMIT 500000", local_engine)
+orderitems = pd.read_sql("SELECT * FROM orderitems LIMIT 500000", local_engine)
 
 
 # ==========================================

@@ -2,6 +2,7 @@ import importlib
 import importlib.util
 import pandas as pd
 import streamlit as st
+import subprocess
 from benchmark import benchmark_query, capture_queries
 
 # Apps that get compared
@@ -75,6 +76,25 @@ def main():
     for module_name, query_name, plan in plans:
         with st.expander(f"EXPLAIN ANALYZE: {module_name} / {query_name}"):
             st.code(plan)
+            
+    st.divider()
+    st.header("Automated Test Suite")
+
+    if st.button("Run Pytest Functional Suite"):
+        with st.spinner("Running pytest..."):
+            res = subprocess.run(
+                ["pytest", "functional_test_baseline.py", "-v"],
+                capture_output=True,
+                text=True,
+            )
+        
+        if res.returncode == 0:
+            st.success("All tests passed!")
+        else:
+            st.error("Test suite execution failed or encountered errors.")
+
+        # Displays both stdout and stderr so connection errors are visible
+        st.code(res.stdout + "\n" + res.stderr, language="bash")
 
 
 if __name__ == "__main__":
