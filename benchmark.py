@@ -79,12 +79,23 @@ def benchmark_query(engine, query, params, runs):
     params = params or {}
 
     with engine.connect() as connection:
-        explain_tree = connection.execute(
-            text("EXPLAIN FORMAT=TREE " + query), params
-        ).scalar()
-        explain_analyze = connection.execute(
-            text("EXPLAIN ANALYZE " + query), params
-        ).scalar()
+        # TiDB compatibility: Use standard EXPLAIN instead of FORMAT=TREE
+        try:
+            explain_tree = connection.execute(
+                text("EXPLAIN " + query), params
+            .scalar() or "")
+        except Exception:
+            explain_tree = ""
+
+        # TiDB supports EXPLAIN ANALYZE, but handle safely if empty
+        try:
+            explain_analyze_result = connection.execute(
+                text("EXPLAIN ANALYZE " + query), params
+            ).fetchall()
+            # Convert rows to a string block for pattern matching
+            explain_analyze = "\n".join([str(row[0]) for row in explain_analyze_result])
+        except Exception as e:
+            explain_analyze = str(e)
 
         run_times = []
         for run in range(runs):
@@ -97,8 +108,8 @@ def benchmark_query(engine, query, params, runs):
     return {
         "sql": query,
         "params": params,
-        "estimated_cost": get_first_number(COST_PATTERN, explain_tree),
-        "mysql_ms": get_first_number(ACTUAL_TIME_PATTERN, explain_analyze),
+        "estimated_cost": get_first_number(COST_PATTERN, explain_tree) or 0.0,
+        "mysql_ms": get_first_number(ACTUAL_TIME_PATTERN, explain_analyze) or 0.0,
         "wall_ms_runs": run_times,
         "wall_ms_median": round(statistics.median(run_times), 1),
         "explain_tree": explain_tree,
